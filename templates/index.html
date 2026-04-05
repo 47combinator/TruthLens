@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="Fake News Detection Tool - Analyze news headlines and claims using multiple news sources to determine if they are real, fake, or uncertain.">
+    <title>TruthLens — Fake News Detector</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <!-- Animated background particles removed for minimalism -->
+
+    <!-- Navbar -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-brand">
+            <div class="nav-logo">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <circle cx="14" cy="14" r="12" stroke="currentColor" stroke-width="2.5" />
+                    <path d="M9 14.5L12.5 18L19 11" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+            </div>
+            <span class="nav-title">TruthLens</span>
+        </div>
+        <div class="nav-badge">🔍 Real-time Web Search</div>
+    </nav>
+
+    <!-- Hero Section -->
+    <main class="main-container">
+        <section class="hero" id="hero">
+            <h1 class="hero-title">
+                <span class="hero-title-line">Detect Fake News</span>
+                <span class="hero-title-line">Instantly</span>
+            </h1>
+            <p class="hero-subtitle">
+                Paste any news headline or paragraph. We'll <strong>search the web</strong> for real sources
+                to cross-check the claim and deliver a verdict.
+            </p>
+        </section>
+
+        <!-- Input Section -->
+        <section class="input-section" id="inputSection">
+            <div class="input-card">
+                <div class="input-card-header">
+                    <div class="input-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                    </div>
+                    <span>Enter News to Analyze</span>
+                </div>
+                <div class="textarea-wrapper">
+                    <textarea id="newsInput"
+                        placeholder="Paste a news headline or paragraph here...&#10;&#10;Example: &quot;Scientists discover that drinking coffee can increase your lifespan by 20 years&quot;"
+                        rows="5" maxlength="2000"></textarea>
+                    <div class="char-count" id="charCount">0 / 2000</div>
+                </div>
+                <button class="analyze-btn" id="analyzeBtn" onclick="analyzeNews()">
+                    <span class="btn-content">
+                        <svg class="btn-icon" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8" />
+                            <path d="m21 21-4.35-4.35" />
+                        </svg>
+                        <span class="btn-text">Analyze News</span>
+                    </span>
+                    <span class="btn-loader" id="btnLoader">
+                        <div class="spinner"></div>
+                        <span>Searching web & analyzing...</span>
+                    </span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Sample Claims -->
+        <section class="samples-section" id="samplesSection">
+            <p class="samples-label">Try an example:</p>
+            <div class="sample-chips">
+                <button class="sample-chip" onclick="fillSample(this)">
+                    Breaking: Scientists discover that eating chocolate daily cures all forms of cancer
+                </button>
+                <button class="sample-chip" onclick="fillSample(this)">
+                    NASA confirms the discovery of water ice on the Moon's south pole
+                </button>
+                <button class="sample-chip" onclick="fillSample(this)">
+                    Government announces new social media app that can read your thoughts
+                </button>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section class="results-section" id="resultsSection" style="display: none;">
+            <div class="result-card" id="resultCard">
+                <!-- Verdict Banner -->
+                <div class="verdict-banner" id="verdictBanner">
+                    <div class="verdict-icon" id="verdictIcon"></div>
+                    <div class="verdict-info">
+                        <span class="verdict-label">Verdict</span>
+                        <span class="verdict-text" id="verdictText"></span>
+                    </div>
+                    <div class="confidence-ring" id="confidenceRing">
+                        <svg viewBox="0 0 80 80">
+                            <circle cx="40" cy="40" r="35" class="ring-bg" />
+                            <circle cx="40" cy="40" r="35" class="ring-fill" id="ringFill" />
+                        </svg>
+                        <div class="confidence-value" id="confidenceValue"></div>
+                    </div>
+                </div>
+
+                <!-- Explanation -->
+                <div class="result-block">
+                    <div class="block-header">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 16v-4" />
+                            <path d="M12 8h.01" />
+                        </svg>
+                        <span>Analysis</span>
+                    </div>
+                    <p class="explanation-text" id="explanationText"></p>
+                </div>
+
+                <!-- Evidence For/Against -->
+                <div class="result-block evidence-block" id="evidenceBlock" style="display: none;">
+                    <div class="evidence-grid">
+                        <div class="evidence-card evidence-for">
+                            <div class="evidence-card-header">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                                <span>Evidence Supporting</span>
+                            </div>
+                            <p id="evidenceForText">—</p>
+                        </div>
+                        <div class="evidence-card evidence-against">
+                            <div class="evidence-card-header">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <line x1="18" y1="6" x2="6" y2="18" />
+                                    <line x1="6" y1="6" x2="18" y2="18" />
+                                </svg>
+                                <span>Evidence Against</span>
+                            </div>
+                            <p id="evidenceAgainstText">—</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Search Queries Used -->
+                <div class="result-block" id="queriesBlock" style="display: none;">
+                    <div class="block-header">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="11" cy="11" r="8" />
+                            <path d="m21 21-4.35-4.35" />
+                        </svg>
+                        <span>Search Queries Used</span>
+                    </div>
+                    <div class="queries-list" id="queriesList"></div>
+                </div>
+
+                <!-- Tips -->
+                <div class="result-block">
+                    <div class="block-header">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                            <path d="M2 17l10 5 10-5" />
+                            <path d="M2 12l10 5 10-5" />
+                        </svg>
+                        <span>Verification Tips</span>
+                    </div>
+                    <ul class="tips-list" id="tipsList"></ul>
+                </div>
+
+                <!-- Web Sources -->
+                <div class="result-block" id="sourcesBlock" style="display: none;">
+                    <div class="block-header">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="2" y1="12" x2="22" y2="12" />
+                            <path
+                                d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                        </svg>
+                        <span>Web Sources Found</span>
+                    </div>
+                    <div class="sources-list" id="sourcesList"></div>
+                </div>
+
+                <!-- Analyze Another -->
+                <button class="analyze-another-btn" onclick="resetForm()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M1 4v6h6" />
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                    </svg>
+                    Analyze Another Claim
+                </button>
+            </div>
+        </section>
+
+        <!-- Error Section -->
+        <section class="error-section" id="errorSection" style="display: none;">
+            <div class="error-card">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="15" y1="9" x2="9" y2="15" />
+                    <line x1="9" y1="9" x2="15" y2="15" />
+                </svg>
+                <p id="errorText"></p>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>TruthLens &copy; 2026 &mdash; News claim analysis. Always verify with multiple sources.</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
