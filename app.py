@@ -14,34 +14,9 @@ from dotenv import load_dotenv
 from ddgs import DDGS
 from urllib.parse import urlparse
 
-try:
-    from supabase import create_client
-except ImportError:
-    create_client = None
-
 load_dotenv()
 app = Flask(__name__)
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-
-# Supabase client (optional — gracefully skipped if not configured)
-_sb_url = os.getenv("SUPABASE_URL")
-_sb_key = os.getenv("SUPABASE_KEY")
-supabase = create_client(_sb_url, _sb_key) if (create_client and _sb_url and _sb_key) else None
-
-def log_to_supabase(claim, result):
-    """Silently save verification result to Supabase. Never raises."""
-    if not supabase:
-        return
-    try:
-        supabase.table("verifications").insert({
-            "claim": claim[:1000],
-            "verdict": result.get("verdict"),
-            "confidence": result.get("confidence"),
-            "sources_count": result.get("sources_count", 0),
-            "explanation": result.get("explanation", "")[:2000],
-        }).execute()
-    except Exception:
-        pass  # Never crash the app over logging
 
 # ─── Expanded & Trusted Source Database ─────────────────────────────────
 INDIAN_NEWS_SITES = [
@@ -389,9 +364,6 @@ def analyze():
 
         print(f"\n=> Verdict: {result.get('verdict')} ({result.get('confidence')}%)")
         print(f"=> Sources: {len(raw_sources)} total | {category_counts}")
-
-        # Log to Supabase (non-blocking, silent on failure)
-        log_to_supabase(news_text, result)
 
         return jsonify(result)
 
