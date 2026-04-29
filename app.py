@@ -1,35 +1,58 @@
 """
-Fake News Detection Tool — v4 (Reliable Search Fix)
-Two-pass AI approach with robust search:
-  Pass 1: Extract key searchable claims from the user's text
-  Searches: DuckDuckGo text + news search (with retry & fallback)
-  Pass 2: Cross-reference with web evidence and give a careful verdict
+TruthLens — AI-Powered Fake News Detection Tool  v5.0
+=====================================================
+Two-pass RAG pipeline:
+  Pass 1: LLaMA 3.3 70B extracts targeted search queries
+  Search: Multi-strategy DuckDuckGo (text + news) with smart retry
+  Pass 2: LLaMA 3.3 70B analyses claim vs. evidence → verdict
 """
 
-import os
-import json
-import time
+import os, json, time, re
 from flask import Flask, render_template, request, jsonify
 from groq import Groq
 from dotenv import load_dotenv
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from urllib.parse import urlparse
 
-# Load environment variables
+try:
+    from supabase import create_client
+except ImportError:
+    create_client = None
+
 load_dotenv()
-
 app = Flask(__name__)
-
-# Initialize Groq client
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# ─── Reputed News Sources ───────────────────────────────────────────────
+# Supabase client (optional — gracefully skipped if not configured)
+_sb_url = os.getenv("SUPABASE_URL")
+_sb_key = os.getenv("SUPABASE_KEY")
+supabase = create_client(_sb_url, _sb_key) if (create_client and _sb_url and _sb_key) else None
+
+def log_to_supabase(claim, result):
+    """Silently save verification result to Supabase. Never raises."""
+    if not supabase:
+        return
+    try:
+        supabase.table("verifications").insert({
+            "claim": claim[:1000],
+            "verdict": result.get("verdict"),
+            "confidence": result.get("confidence"),
+            "sources_count": result.get("sources_count", 0),
+            "explanation": result.get("explanation", "")[:2000],
+        }).execute()
+    except Exception:
+        pass  # Never crash the app over logging
+
+# ─── Expanded & Trusted Source Database ─────────────────────────────────
 INDIAN_NEWS_SITES = [
     "ndtv.com", "thehindu.com", "hindustantimes.com", "indianexpress.com",
     "timesofindia.indiatimes.com", "livemint.com", "thequint.com",
     "scroll.in", "theprint.in", "news18.com", "indiatoday.in",
     "deccanherald.com", "telegraphindia.com", "economictimes.indiatimes.com",
-    "business-standard.com", "pib.gov.in",
+    "business-standard.com", "pib.gov.in", "moneycontrol.com",
+    "firstpost.com", "wionews.com", "thestatesman.com",
+    "dnaindia.com", "outlookindia.com", "newslaundry.com",
+    "thewire.in", "swarajyamag.com",
 ]
 
 INTERNATIONAL_NEWS_SITES = [
@@ -37,26 +60,33 @@ INTERNATIONAL_NEWS_SITES = [
     "theguardian.com", "washingtonpost.com", "aljazeera.com", "france24.com",
     "dw.com", "cnn.com", "npr.org", "abc.net.au", "bloomberg.com",
     "forbes.com", "economist.com", "nature.com", "sciencedirect.com",
+    "who.int", "un.org", "nasa.gov", "nih.gov", "cdc.gov",
+    "time.com", "independent.co.uk", "sky.com", "nbcnews.com",
+    "cbsnews.com", "abcnews.go.com", "usatoday.com",
+    "scmp.com", "japantimes.co.jp", "straitstimes.com",
 ]
 
 FACT_CHECK_SITES = [
     "factcheck.org", "snopes.com", "politifact.com", "altnews.in",
     "boomlive.in", "vishvasnews.com", "factly.in", "thip.media",
-    "fullfact.org", "checkyourfact.com",
+    "fullfact.org", "checkyourfact.com", "truthorfiction.com",
+    "reuters.com/fact-check", "apnews.com/hub/ap-fact-check",
+    "africacheck.org", "logically.ai", "leadstories.com",
+    "misbar.com", "newschecker.in",
 ]
 
 ALL_REPUTED = set(INDIAN_NEWS_SITES + INTERNATIONAL_NEWS_SITES + FACT_CHECK_SITES)
 
 
 def classify_source(url):
-    """Classify a URL as Indian News, International News, Fact-Check, or General."""
+    """Classify a URL into a source category."""
     try:
         domain = urlparse(url).netloc.lower().replace("www.", "")
     except Exception:
         return "General"
 
     for site in FACT_CHECK_SITES:
-        if site in domain:
+        if site in domain or site in url:
             return "Fact-Check"
     for site in INDIAN_NEWS_SITES:
         if site in domain:
@@ -68,17 +98,37 @@ def classify_source(url):
 
 
 def safe_search(query, max_results=8):
-    """Run DuckDuckGo NEWS search with retry. This is the only reliable
-    search method in the current duckduckgo_search package version."""
-    for attempt in range(3):
+    """Run DuckDuckGo search with cascading fallback: text → news → retry."""
+    results = []
+
+    # Strategy 1: Text search (most reliable)
+    for attempt in range(2):
         try:
-            with DDGS() as ddgs:
-                results = list(ddgs.news(query, max_results=max_results))
+            ddgs = DDGS()
+            results = list(ddgs.text(query, max_results=max_results))
             if results:
-                return results
+                return [
+                    {
+                        "title": r.get("title", ""),
+                        "body": r.get("body", ""),
+                        "href": r.get("href", ""),
+                        "url": r.get("href", ""),
+                    }
+                    for r in results
+                ]
         except Exception as e:
-            print(f"  Search attempt {attempt+1} failed: {e}")
-            time.sleep(0.8)
+            print(f"  Text search attempt {attempt+1} failed: {e}")
+            time.sleep(1.2)
+
+    # Strategy 2: News search
+    try:
+        ddgs = DDGS()
+        results = list(ddgs.news(query, max_results=max_results))
+        if results:
+            return results
+    except Exception as e:
+        print(f"  News search failed: {e}")
+
     return []
 
 
@@ -120,15 +170,13 @@ def extract_search_queries(claim):
 
 def search_all_sources(original_claim, extracted_queries):
     """
-    Run multiple news searches sequentially with small delays.
-    Uses ddgs.news() which searches actual news articles from
-    real publications around the world.
+    Run multiple searches sequentially with de-duplication.
+    Strategy: original -> extracted queries -> fact-check -> fallback
     """
     all_results = []
     seen_urls = set()
 
-    def add_results(results, source_type="news"):
-        """De-duplicate and add results."""
+    def add_results(results, source_type="text"):
         added = 0
         for r in results:
             url = r.get("url") or r.get("href", "")
@@ -145,49 +193,56 @@ def search_all_sources(original_claim, extracted_queries):
                 added += 1
         return added
 
-    # ── Search 1: News search with original claim ──
-    print(f"[Search 1] Original claim: {original_claim[:60]}...")
+    # ── Search 1: Original claim ──
+    print(f"[Search 1] Original: {original_claim[:60]}...")
     results = safe_search(original_claim, max_results=10)
-    count = add_results(results, "news")
-    print(f"  -> Found {len(results)} results, {count} new")
+    count = add_results(results, "text")
+    print(f"  -> {len(results)} found, {count} new")
 
-    # ── Search 2-4: News search with each extracted query ──
+    # ── Search 2-4: Extracted queries ──
     for i, query in enumerate(extracted_queries):
-        print(f"[Search {2+i}] Extracted query: {query}")
-        time.sleep(0.4)
-        results = safe_search(query, max_results=6)
-        count = add_results(results, "news")
-        print(f"  -> Found {len(results)} results, {count} new")
+        print(f"[Search {2+i}] Query: {query}")
+        time.sleep(0.5)
+        results = safe_search(query, max_results=8)
+        count = add_results(results, "text")
+        print(f"  -> {len(results)} found, {count} new")
 
-    # ── Search 5: Fact-check specific search ──
+    # ── Search 5: Fact-check specific ──
     fact_query = f"{original_claim} fact check"
     print(f"[Search {2+len(extracted_queries)}] Fact-check: {fact_query[:60]}...")
-    time.sleep(0.4)
-    results = safe_search(fact_query, max_results=5)
+    time.sleep(0.5)
+    results = safe_search(fact_query, max_results=6)
     count = add_results(results, "fact-check")
-    print(f"  -> Found {len(results)} results, {count} new")
+    print(f"  -> {len(results)} found, {count} new")
 
-    # ── Search 6: If still low results, try a simpler version of the claim ──
+    # ── Search 6: Site-specific searches for top sources ──
+    if len(all_results) < 8:
+        short_claim = " ".join(original_claim.split()[:5])
+        for site in ["reuters.com", "bbc.com", "ndtv.com"]:
+            site_query = f"site:{site} {short_claim}"
+            print(f"[Search Extra] Site: {site_query[:60]}...")
+            time.sleep(0.4)
+            results = safe_search(site_query, max_results=3)
+            add_results(results, "site-search")
+
+    # ── Search 7: Fallback short query ──
     if len(all_results) < 5:
-        # Try a shorter, simpler query
         words = original_claim.split()
-        short_query = " ".join(words[:6]) if len(words) > 6 else original_claim
-        print(f"[Search Extra] Short query fallback: {short_query}")
+        short = " ".join(words[:6]) if len(words) > 6 else original_claim
+        print(f"[Search Fallback] Short: {short}")
         time.sleep(0.4)
-        results = safe_search(short_query, max_results=8)
-        count = add_results(results, "news")
-        print(f"  -> Found {len(results)} results, {count} new")
+        results = safe_search(short, max_results=8)
+        add_results(results, "fallback")
 
-    print(f"\n[OK] Total unique sources found: {len(all_results)}")
+    print(f"\n[OK] Total unique sources: {len(all_results)}")
     return all_results
 
 
 def format_search_results(results):
     """Format search results for the LLM, sorted by reliability."""
     if not results:
-        return "NO WEB SEARCH RESULTS WERE FOUND FOR THIS CLAIM. The search may have failed or this topic may be too niche."
+        return "NO WEB SEARCH RESULTS WERE FOUND FOR THIS CLAIM."
 
-    # Sort: Fact-Check first, then reputed news, then general
     priority = {"Fact-Check": 0, "Indian News": 1, "International News": 2, "General": 3}
     results.sort(key=lambda r: priority.get(r.get("_category", "General"), 3))
 
@@ -197,8 +252,7 @@ def format_search_results(results):
         body = r.get("body", "No snippet")
         url = r.get("href", "")
         cat = r.get("_category", "General")
-        src = r.get("_source_type", "text")
-        formatted.append(f"[Source {i}] [{cat}] [{src}] {title}\n{body}\nURL: {url}")
+        formatted.append(f"[Source {i}] [{cat}] {title}\n{body}\nURL: {url}")
 
     return "\n\n".join(formatted)
 
@@ -238,7 +292,6 @@ You will receive:
 - If search results show the topic is real and being discussed, that IS evidence it's real.
 - Be GENEROUS when sources partially confirm a claim.
 - Only use FAKE when you have CLEAR, DIRECT contradicting evidence.
-- For questions (like "is X happening?"), analyze based on whether X is actually happening according to sources.
 
 ## CONFIDENCE GUIDELINES:
 - REAL with many supporting sources: 80-95%
@@ -286,9 +339,9 @@ def analyze():
         print(f"{'='*60}")
         extracted_queries = extract_search_queries(news_text)
         all_queries = [news_text] + extracted_queries
-        print(f"Search queries: {extracted_queries}")
+        print(f"Extracted queries: {extracted_queries}")
 
-        # ── SEARCH: Multi-strategy (text + news + fact-check) ──
+        # ── SEARCH: Multi-strategy ──
         all_results = search_all_sources(news_text, extracted_queries)
         search_context = format_search_results(all_results)
 
@@ -326,6 +379,7 @@ def analyze():
         # Attach metadata
         result["web_sources"] = raw_sources
         result["search_queries"] = all_queries
+        result["sources_count"] = len(raw_sources)
 
         category_counts = {}
         for s in raw_sources:
@@ -335,6 +389,9 @@ def analyze():
 
         print(f"\n=> Verdict: {result.get('verdict')} ({result.get('confidence')}%)")
         print(f"=> Sources: {len(raw_sources)} total | {category_counts}")
+
+        # Log to Supabase (non-blocking, silent on failure)
+        log_to_supabase(news_text, result)
 
         return jsonify(result)
 
