@@ -402,4 +402,5 @@ def analyze():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, use_reloader=False, port=5000)
+    port = int(os.getenv("PORT", 5000))
+    app.run(debug=False, use_reloader=False, host="0.0.0.0", port=port)
